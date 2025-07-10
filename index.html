@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+  body {
+    touch-action: manipulation; /* Отключаем масштабирование */
+    overflow: hidden;
+    margin: 0;
+  }
+</style>
+        
+        #canvas {
+            display: block;
+        }
+        
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+            width: 250px;
+        }
+        
+        button {
+            margin-top: 5px;
+            padding: 8px;
+            cursor: pointer;
+            width: 100%;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        .tab-buttons {
+            display: flex;
+            margin-bottom: 10px;
+        }
+        
+        .tab-button {
+            flex: 1;
+            margin: 0 2px;
+            padding: 5px;
+        }
+        
+        .active-tab {
+            background: #3498db;
+            color: white;
+        }
+        
+        #fileInput {
+            display: none;
+        }
+        
+        .upload-btn { background: #4CAF50; color: white; }
+        #clearAll { background: #ff6b6b; color: white; }
+        #shake { background: #f1c40f; color: black; }
+        #explode { background: #e74c3c; color: white; }
+        
+        h3 {
+            margin: 0 0 10px 0;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h3>dice control panel</h3>
+        
+        <div class="tab-buttons">
+            <button class="tab-button active-tab" data-location="earth">Earth</button>
+            <button class="tab-button" data-location="moon">Moon</button>
+            <button class="tab-button" data-location="space">Space</button>
+        </div>
+        
+        <button id="addBox">➕ Add Box</button>
+        <button id="shake">🌀 Shake</button>
+        <button id="explode">💥 Explode</button>
+        <button class="upload-btn" id="uploadBtn">📁 Upload Image</button>
+        <input type="file" id="fileInput" accept="image/*">
+        <button id="clearAll">❌ Clear All</button>
+    </div>
+    
+    <canvas id="canvas"></canvas>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.18.0/matter.min.js"></script>
+    <script>
+        // Инициализация Matter.js
+        const Engine = Matter.Engine,
+              Render = Matter.Render,
+              World = Matter.World,
+              Bodies = Matter.Bodies,
+              Body = Matter.Body,
+              Mouse = Matter.Mouse,
+              MouseConstraint = Matter.MouseConstraint,
+              Events = Matter.Events;
+
+        // Создание движка
+        const engine = Engine.create();
+        const world = engine.world;
+        
+        // Текущая локация
+        let currentLocation = 'earth';
+        let currentTexture = null;
+        
+        // Настройки локаций
+        const locations = {
+            earth: {
+                gravity: { x: 0, y: 1 },
+                ground: { color: '#2ecc71' },
+                background: '#3498db'
+            },
+            moon: {
+                gravity: { x: 0, y: 0.16 },
+                ground: { color: '#95a5a6' },
+                background: '#34495e'
+            },
+            space: {
+                gravity: { x: 0, y: 0.02 },
+                ground: { color: '#9b59b6' },
+                background: '#2c3e50'
+            }
+        };
+        
+        // Настройка рендерера
+        const canvas = document.getElementById('canvas');
+        const render = Render.create({
+            canvas: canvas,
+            engine: engine,
+            options: {
+                width: window.innerWidth,
+                height: window.innerHeight,
+                wireframes: false,
+                background: locations.earth.background,
+                showAngleIndicator: true
+            }
+        });
+        
+        // Элементы мира
+        let ground, leftWall, rightWall;
+        const boxes = [];
+        
+        // Инициализация мира
+        function initWorld() {
+            // Очищаем мир
+            World.clear(world, false);
+            boxes.length = 0;
+            
+            // Устанавливаем гравитацию
+            engine.gravity = locations[currentLocation].gravity;
+            
+            // Создаем землю
+            ground = Bodies.rectangle(
+                window.innerWidth / 2,
+                window.innerHeight - 20,
+                window.innerWidth,
+                60,
+                {
+                    isStatic: true,
+                    chamfer: { radius: 10 },
+                    render: {
+                        fillStyle: locations[currentLocation].ground.color,
+                        strokeStyle: '#000'
+                    }
+                }
+            );
+            
+            // Создаем стены
+            leftWall = Bodies.rectangle(-50, window.innerHeight / 2, 100, window.innerHeight, {
+                isStatic: true,
+                render: { visible: false }
+            });
+            
+            rightWall = Bodies.rectangle(window.innerWidth + 50, window.innerHeight / 2, 100, window.innerHeight, {
+                isStatic: true,
+                render: { visible: false }
+            });
+            
+            // Добавляем объекты в мир
+            World.add(world, [ground, leftWall, rightWall]);
+            
+            // Меняем фон
+            render.options.background = locations[currentLocation].background;
+            
+            // Добавляем основной кубик
+            addBox(window.innerWidth / 2, 200);
+            
+            // Инициализация мыши (перенесено сюда для правильной работы)
+            initMouse();
+        }
+        
+        // Инициализация мыши
+        function initMouse() {
+            const mouse = Mouse.create(render.canvas);
+            const mouseConstraint = MouseConstraint.create(engine, {
+                mouse: mouse,
+                constraint: {
+                    stiffness: 0.2,
+                    angularStiffness: 0,
+                    render: {
+                        visible: true,
+                        type: 'line',
+                        anchors: false
+                    }
+                }
+            });
+            
+            World.add(world, mouseConstraint);
+            render.mouse = mouse;
+            
+            // Обработчик для корректного перетаскивания
+            Events.on(mouseConstraint, 'startdrag', function(event) {
+                const body = event.body;
+                if (body && body.isStatic) {
+                    body.isStatic = false;
+                }
+            });
+        }
+        
+        // Функция создания кубика
+        function addBox(x, y, size = 60) {
+            const options = {
+                restitution: 0.6,
+                friction: 0.1,
+                frictionAir: currentLocation === 'space' ? 0.001 : 0.01,
+                chamfer: { radius: 5 },
+                render: {
+                    fillStyle: currentTexture ? undefined : getRandomColor(),
+                    strokeStyle: '#000',
+                    lineWidth: 2
+                }
+            };
+            
+            if (currentTexture) {
+                options.render.sprite = {
+                    texture: currentTexture,
+                    xScale: 1,
+                    yScale: 1
+                };
+            }
+            
+            const box = Bodies.rectangle(x, y, size, size, options);
+            boxes.push(box);
+            World.add(world, box);
+            return box;
+        }
+        
+        // Случайный цвет
+        function getRandomColor() {
+            const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f1c40f', '#9b59b6', '#1abc9c'];
+            return colors[Math.floor(Math.random() * colors.length)];
+        }
+        
+        // Переключение локации
+        function switchLocation(location) {
+            currentLocation = location;
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.classList.toggle('active-tab', btn.dataset.location === location);
+            });
+            initWorld();
+        }
+        
+        // Взрыв кубиков
+        function explode() {
+            const center = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+            const power = currentLocation === 'earth' ? 0.05 : 
+                         currentLocation === 'moon' ? 0.1 : 0.2;
+            
+            // Создаем осколки
+            const fragments = [];
+            boxes.forEach(box => {
+                const count = 3 + Math.floor(Math.random() * 4);
+                for (let i = 0; i < count; i++) {
+                    const size = box.bounds.max.x - box.bounds.min.x;
+                    const fragment = addBox(
+                        box.position.x + (Math.random() - 0.5) * 20,
+                        box.position.y + (Math.random() - 0.5) * 20,
+                        size / 2
+                    );
+                    
+                    const direction = {
+                        x: fragment.position.x - center.x,
+                        y: fragment.position.y - center.y
+                    };
+                    
+                    const distance = Math.sqrt(direction.x**2 + direction.y**2);
+                    const force = {
+                        x: direction.x / distance * power * (0.8 + Math.random() * 0.4),
+                        y: direction.y / distance * power * (0.8 + Math.random() * 0.4)
+                    };
+                    
+                    Body.applyForce(fragment, fragment.position, force);
+                    Body.setAngularVelocity(fragment, (Math.random() - 0.5) * 0.3);
+                    
+                    fragments.push(fragment);
+                }
+            });
+            
+            // Удаляем старые кубики
+            boxes.splice(0, boxes.length - fragments.length);
+        }
+        
+        // Запуск рендерера
+        Render.run(render);
+        const runner = Engine.run(engine);
+        
+        // Обработчики событий
+        document.querySelectorAll('.tab-button').forEach(btn => {
+            btn.addEventListener('click', () => switchLocation(btn.dataset.location));
+        });
+        
+        document.getElementById('addBox').addEventListener('click', () => {
+            addBox(
+                Math.random() * window.innerWidth * 0.8 + window.innerWidth * 0.1,
+                Math.random() * 100 + 50,
+                Math.random() * 40 + 30
+            );
+        });
+        
+        document.getElementById('shake').addEventListener('click', () => {
+            boxes.forEach(box => {
+                Body.applyForce(box, box.position, {
+                    x: (Math.random() - 0.5) * 0.02,
+                    y: -Math.random() * 0.01
+                });
+            });
+        });
+        
+        document.getElementById('explode').addEventListener('click', explode);
+        
+        document.getElementById('clearAll').addEventListener('click', () => {
+            boxes.length = 0;
+            initWorld();
+        });
+        
+        document.getElementById('uploadBtn').addEventListener('click', () => {
+            document.getElementById('fileInput').click();
+        });
+        
+        document.getElementById('fileInput').addEventListener('change', e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = event => {
+                currentTexture = event.target.result;
+                boxes.forEach(box => {
+                    box.render.sprite = { texture: currentTexture };
+                    delete box.render.fillStyle;
+                });
+            };
+            reader.readAsDataURL(file);
+        });
+        
+        window.addEventListener('resize', () => {
+            render.options.width = window.innerWidth;
+            render.options.height = window.innerHeight;
+            
+            if (ground) {
+                Body.setPosition(ground, {
+                    x: window.innerWidth / 2,
+                    y: window.innerHeight - 30
+                });
+                
+                Body.setPosition(leftWall, { x: -50, y: window.innerHeight / 2 });
+                Body.setPosition(rightWall, { 
+                    x: window.innerWidth + 50, 
+                    y: window.innerHeight / 2 
+                });
+            }
+        });
+        
+        // Удаление улетевших кубиков
+        Events.on(engine, 'afterUpdate', () => {
+            for (let i = boxes.length - 1; i >= 0; i--) {
+                if (boxes[i].position.y > window.innerHeight + 200) {
+                    World.remove(world, boxes[i]);
+                    boxes.splice(i, 1);
+                }
+            }
+        });
+        
+        // Начальная инициализация
+        initWorld();
+    </script>
+</body>
+</html>
